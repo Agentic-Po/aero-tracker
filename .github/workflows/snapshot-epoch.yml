@@ -2,7 +2,7 @@ name: snapshot-epoch
 
 on:
   schedule:
-    - cron: '0 23 * * 3'    # Wednesday 23:00 UTC — 1h before epoch flip Thu 00:00 UTC
+    - cron: '0 23 * * 3'    # Wednesday 23:00 UTC — 1h before epoch flip
   workflow_dispatch:
     inputs:
       dry_run:
@@ -28,13 +28,20 @@ jobs:
       - name: Install Python deps
         run: pip install -r requirements.txt
 
-      - name: Install Lightpanda
+      - name: Cache Playwright browsers
+        id: pw-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: pw-chromium-${{ runner.os }}-v1
+
+      - name: Install Playwright Chromium
         run: |
-          curl -L -o lightpanda \
-            https://github.com/lightpanda-io/browser/releases/download/nightly/lightpanda-x86_64-linux
-          chmod +x lightpanda
-          sudo mv lightpanda /usr/local/bin/lightpanda
-          lightpanda --version || true
+          if [ "${{ steps.pw-cache.outputs.cache-hit }}" = "true" ]; then
+            python -m playwright install-deps chromium
+          else
+            python -m playwright install --with-deps chromium
+          fi
 
       - name: Run epoch snapshot
         env:
@@ -50,8 +57,8 @@ jobs:
             python -m scraper.main --mode epoch
           fi
 
-      - name: Upload debug HTML on failure
-        if: failure()
+      - name: Upload debug HTML
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: debug-html-epoch-${{ github.run_id }}

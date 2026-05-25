@@ -15,7 +15,7 @@ from dataclasses import asdict
 
 from dotenv import load_dotenv
 
-from scraper import lightpanda, notify, parse, price, store
+from scraper import fetcher, notify, parse, price, store
 from scraper.multiplier import compute as compute_multiplier
 
 VOTE_URL = "https://aerodrome.finance/vote"
@@ -32,7 +32,7 @@ def _is_ignition(pair: str) -> bool:
 
 def run_8h(dry_run: bool) -> int:
     print(f"[8h] fetching {VOTE_URL}", flush=True)
-    html = lightpanda.fetch(VOTE_URL)
+    html = fetcher.fetch(VOTE_URL)
     page = parse.parse_summary(html)
     print(f"[8h] parsed summary: {page}", flush=True)
 
@@ -101,7 +101,7 @@ def run_8h(dry_run: bool) -> int:
 
 def run_epoch(dry_run: bool) -> int:
     print(f"[epoch] fetching {VOTE_URL}", flush=True)
-    html = lightpanda.fetch(VOTE_URL)
+    html = fetcher.fetch(VOTE_URL)
     page = parse.parse_full(html)
 
     if not page.pools:
