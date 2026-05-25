@@ -1,14 +1,17 @@
 """Parse the rendered HTML of https://aerodrome.finance/vote.
 
-The Aerodrome /vote page is a JS-rendered SPA. After Lightpanda renders it, we
-extract the top-of-page summary (total voting power, fees, incentives, rewards,
-new emission) and the per-pool list (for the epoch-winner job).
+Two strategies, in order of preference:
 
-NOTE: The first deployment will almost certainly need parser tuning against the
-real HTML. Set DEBUG_DUMP_HTML=1 and run with --dry-run to capture a snapshot,
-then adjust the strategies below. Each labelled field has a `_extract_labelled`
-call that tries label-adjacent-value first; if that fails it falls back to a
-regex over the raw text.
+1. `data-test-amount="..."` — Aerodrome's frontend tags every formatted number
+   with this attribute, value = raw unformatted decimal. Most reliable.
+
+2. Label-then-nearest-dollar-amount — fallback when no data-test-amount tag is
+   adjacent to the label (used by the original aero-multiplier.sh for Total
+   Rewards).
+
+new_emissions + total_rewards are REQUIRED. Other fields (voting power, fees,
+incentives) are optional — we'll return None if not present and let the dashboard
+display "—".
 """
 
 from __future__ import annotations
@@ -22,11 +25,11 @@ from bs4 import BeautifulSoup
 
 _NUM_RE = re.compile(
     r"""
-    \$?\s*                      # optional $
+    \$?\s*
     (?P<num>
-        \d{1,3}(?:,\d{3})*(?:\.\d+)?   # 1,234,567.89
+        \d{1,3}(?:,\d{3})*(?:\.\d+)?
         |
-        \d+(?:\.\d+)?                  # 1234.56
+        \d+(?:\.\d+)?
     )
     \s*
     (?P<suffix>[KMB])?
@@ -49,11 +52,11 @@ class Pool:
 
 @dataclass
 class VotePage:
-    total_voting_power: float
-    total_fees: float
-    total_incentives: float
-    total_rewards: float
     new_emissions: float
+    total_rewards: float
+    total_voting_power: Optional[float] = None
+    total_fees: Optional[float] = None
+    total_incentives: Optional[float] = None
     pools: list[Pool] = field(default_factory=list)
 
 
@@ -62,7 +65,6 @@ class ParseError(RuntimeError):
 
 
 def parse_number(text: str) -> Optional[float]:
-    """Parse a human-formatted number with optional $ prefix and K/M/B suffix."""
     if not text:
         return None
     m = _NUM_RE.search(text)
@@ -79,86 +81,98 @@ def parse_number(text: str) -> Optional[float]:
     return value
 
 
-def _extract_labelled(soup: BeautifulSoup, label: str) -> Optional[float]:
-    """Find an element whose text matches `label` (case-insensitive substring),
-    then look at sibling/parent text for the numeric value."""
-    label_lc = label.lower()
+def _extract_data_test_amount(html: str, label: str) -> Optional[float]:
+    """Find the first data-test-amount attribute appearing after `label`.
 
-    # Strategy 1: any element whose direct text contains the label
-    for el in soup.find_all(string=lambda t: t and label_lc in t.lower()):
-        parent = el.parent
-        if not parent:
-            continue
-        # Try siblings in document order
-        for sib in list(parent.next_siblings) + list(parent.parent.children if parent.parent else []):
-            if sib is el or sib is parent:
-                continue
-            txt = getattr(sib, "get_text", lambda: str(sib))()
-            val = parse_number(txt)
-            if val is not None:
-                return val
-        # Try the parent's own combined text minus the label
-        parent_text = parent.get_text(" ", strip=True)
-        cleaned = re.sub(re.escape(label), "", parent_text, flags=re.IGNORECASE)
-        val = parse_number(cleaned)
-        if val is not None:
-            return val
-    return None
+    Matches the technique used by the original aero-multiplier.sh:
+      grep -oP 'New Emissions:.*?<span[^>]*data-test-amount="\K[^"]+'
+    """
+    pattern = re.escape(label) + r'.*?data-test-amount="([^"]+)"'
+    m = re.search(pattern, html, re.DOTALL | re.IGNORECASE)
+    if not m:
+        return None
+    raw = m.group(1).replace(",", "")
+    try:
+        return float(raw)
+    except ValueError:
+        return None
 
 
-def _extract_by_regex(text: str, label_pattern: str) -> Optional[float]:
-    """Last-resort: find label then nearest number on the raw text."""
-    m = re.search(label_pattern + r"[^0-9$]*([\d.,]+\s*[KMB]?)", text, re.IGNORECASE)
-    if m:
-        return parse_number(m.group(1))
-    return None
+def _extract_dollar_after_label(html: str, label_pattern: str) -> Optional[float]:
+    """Find a $-prefixed number on the page after a label match."""
+    pattern = label_pattern + r".*?\$([\d,]+(?:\.\d+)?)\s*([KMB])?"
+    m = re.search(pattern, html, re.DOTALL | re.IGNORECASE)
+    if not m:
+        return None
+    raw = m.group(1).replace(",", "")
+    try:
+        value = float(raw)
+    except ValueError:
+        return None
+    if m.group(2):
+        value *= _SUFFIX_MULT[m.group(2)]
+    return value
 
 
 def parse_summary(html: str) -> VotePage:
-    """Extract the top-of-page totals. Raises ParseError if any are missing."""
-    soup = BeautifulSoup(html, "html.parser")
-    text = soup.get_text(" ", strip=True)
+    """Extract top-of-page totals. new_emissions and total_rewards are required."""
+    # ---- New Emissions (required) ----
+    new_emissions = _extract_data_test_amount(html, "New Emissions")
+    if new_emissions is None:
+        # fallback: look for "New Emissions" followed by N (K/M/B optional)
+        m = re.search(
+            r"new\s+emissions?[:\s]*([\d,]+(?:\.\d+)?)\s*([KMB])?",
+            html, re.IGNORECASE | re.DOTALL,
+        )
+        if m:
+            new_emissions = float(m.group(1).replace(",", ""))
+            if m.group(2):
+                new_emissions *= _SUFFIX_MULT[m.group(2)]
 
-    labels = {
-        "total_voting_power": ("Total Voting Power", r"total\s+voting\s+power"),
-        "total_fees":         ("Total Fees",         r"total\s+fees"),
-        "total_incentives":   ("Total Incentives",   r"total\s+incentives"),
-        "total_rewards":      ("Total Rewards",      r"total\s+rewards"),
-        "new_emissions":      ("New Emissions",      r"new\s+emissions?"),
-    }
+    # ---- Total Rewards (required) ----
+    total_rewards = _extract_data_test_amount(html, "Total Rewards")
+    if total_rewards is None:
+        total_rewards = _extract_dollar_after_label(html, r"total\s+rewards")
 
-    extracted: dict[str, float] = {}
-    missing: list[str] = []
-    for key, (dom_label, regex_label) in labels.items():
-        val = _extract_labelled(soup, dom_label)
-        if val is None:
-            val = _extract_by_regex(text, regex_label)
-        if val is None:
-            missing.append(dom_label)
-        else:
-            extracted[key] = val
+    # ---- Optional fields ----
+    total_voting_power = (
+        _extract_data_test_amount(html, "Total Voting Power")
+        or _extract_data_test_amount(html, "Voting Power")
+    )
+    total_fees = (
+        _extract_data_test_amount(html, "Total Fees")
+        or _extract_dollar_after_label(html, r"total\s+fees")
+    )
+    total_incentives = (
+        _extract_data_test_amount(html, "Total Incentives")
+        or _extract_dollar_after_label(html, r"total\s+incentives")
+    )
+
+    missing = []
+    if new_emissions is None: missing.append("New Emissions")
+    if total_rewards is None: missing.append("Total Rewards")
 
     if missing:
         raise ParseError(
-            f"Could not extract: {missing}. "
-            "Set DEBUG_DUMP_HTML=1 and inspect debug_dumps/ to recalibrate parsers."
+            f"Required fields missing: {missing}. "
+            "Set DEBUG_DUMP_HTML=1 and inspect debug_dumps/ to recalibrate."
         )
 
     return VotePage(
-        total_voting_power=extracted["total_voting_power"],
-        total_fees=extracted["total_fees"],
-        total_incentives=extracted["total_incentives"],
-        total_rewards=extracted["total_rewards"],
-        new_emissions=extracted["new_emissions"],
+        new_emissions=new_emissions,
+        total_rewards=total_rewards,
+        total_voting_power=total_voting_power,
+        total_fees=total_fees,
+        total_incentives=total_incentives,
         pools=[],
     )
 
 
 def parse_pools(html: str) -> list[Pool]:
-    """Extract the per-pool rows (pair name + votes at minimum).
+    """Extract per-pool rows (pair name + votes at minimum).
 
-    Heuristic: find each pool row by looking for a pair label like "AERO/USDC"
-    or "vAMM-X/Y", then read votes from the same row. Calibrate after first run.
+    Heuristic: look for ticker/ticker patterns and pull data-test-amount nearby.
+    Likely needs calibration after the first epoch-winner run.
     """
     soup = BeautifulSoup(html, "html.parser")
     pools: list[Pool] = []
@@ -170,11 +184,21 @@ def parse_pools(html: str) -> list[Pool]:
         pair = pair_re.search(el).group(0)
         if pair in seen:
             continue
-        # find the row container
         row = el.parent
         for _ in range(6):
             if row is None:
                 break
+            row_html = str(row)
+            # Try data-test-amount first
+            m = re.search(r'data-test-amount="([^"]+)"', row_html)
+            if m:
+                try:
+                    votes = float(m.group(1).replace(",", ""))
+                    pools.append(Pool(pair=pair, votes=votes))
+                    seen.add(pair)
+                    break
+                except ValueError:
+                    pass
             row_text = row.get_text(" ", strip=True)
             votes_m = re.search(r"([\d.,]+\s*[KMB]?)\s*(?:votes|veAERO|VP)", row_text, re.IGNORECASE)
             if votes_m:

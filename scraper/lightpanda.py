@@ -1,4 +1,9 @@
-"""Thin wrapper around the Lightpanda CLI to fetch a JS-rendered page."""
+"""Thin wrapper around the Lightpanda CLI to fetch a JS-rendered page.
+
+Uses --wait-until networkidle and --wait-ms so the SPA's initial data fetch
+completes before the HTML is dumped. These flags were the trick that made the
+original OpenClaw script work past Aerodrome's wallet-connect overlay.
+"""
 
 from __future__ import annotations
 
@@ -12,15 +17,31 @@ class LightpandaError(RuntimeError):
     pass
 
 
-def fetch(url: str, timeout: int = 60, lightpanda_path: Optional[str] = None) -> str:
-    """Run `lightpanda fetch --dump <url>` and return the rendered HTML.
+def fetch(
+    url: str,
+    timeout: int = 90,
+    lightpanda_path: Optional[str] = None,
+    wait_until: str = "networkidle",
+    wait_ms: int = 20000,
+    http_timeout_ms: int = 20000,
+) -> str:
+    """Run `lightpanda fetch --dump html ... <url>` and return rendered HTML.
 
-    Raises LightpandaError on non-zero exit or empty output.
+    Raises LightpandaError on non-zero exit or suspiciously small output.
     """
     binary = lightpanda_path or os.environ.get("LIGHTPANDA_PATH", "lightpanda")
 
+    cmd = [
+        binary, "fetch",
+        "--dump", "html",
+        "--wait-until", wait_until,
+        "--wait-ms", str(wait_ms),
+        "--http-timeout", str(http_timeout_ms),
+        url,
+    ]
+
     proc = subprocess.run(
-        [binary, "fetch", "--dump", url],
+        cmd,
         capture_output=True,
         text=True,
         timeout=timeout,
