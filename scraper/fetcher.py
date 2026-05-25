@@ -33,35 +33,83 @@ _USER_AGENT = (
     "(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
 )
 
-# Stub Ethereum provider — Base mainnet chainId 0x2105, fixed dead address.
-# This satisfies wagmi's "is a wallet present?" check without ever signing.
+# Wallet-gate bypass for Aerodrome v5.
+#
+# Confirmed from prior dump of /vote localStorage that Aerodrome uses:
+#   - wagmi store key:        "wagmi-drome-v5.0.0.store"  (NOT the default "wagmi.store")
+#   - AppKit status keys:     "@appkit/connection_status", "@appkit/active_namespace",
+#                             "@appkit/active_caip_network_id"
+# We pre-populate those with a "connected" state pointing at our injected provider,
+# and stub window.ethereum so wagmi's verification calls succeed.
 _INIT_SCRIPT = """
 const fakeAddr = '0x000000000000000000000000000000000000dEaD';
 const baseChainId = '0x2105'; // 8453
-window.ethereum = {
+
+// ---- 1. Stub Ethereum provider ----
+const provider = {
     isMetaMask: true,
     isConnected: () => true,
     chainId: baseChainId,
+    networkVersion: '8453',
     selectedAddress: fakeAddr,
     request: async ({ method, params }) => {
         switch (method) {
-            case 'eth_chainId': return baseChainId;
+            case 'eth_chainId':          return baseChainId;
             case 'eth_accounts':
-            case 'eth_requestAccounts': return [fakeAddr];
+            case 'eth_requestAccounts':  return [fakeAddr];
+            case 'net_version':          return '8453';
+            case 'wallet_getPermissions':
+                return [{ parentCapability: 'eth_accounts', caveats: [] }];
+            case 'wallet_requestPermissions':
+                return [{ parentCapability: 'eth_accounts', caveats: [] }];
             case 'wallet_switchEthereumChain':
             case 'wallet_addEthereumChain': return null;
-            case 'net_version': return '8453';
+            case 'personal_sign':
+            case 'eth_sign':
+            case 'eth_signTypedData_v4':  return '0x' + '00'.repeat(65);
             default: return null;
         }
     },
     on: () => {},
     removeListener: () => {},
+    removeAllListeners: () => {},
     enable: async () => [fakeAddr],
 };
-// Hint at a connected wagmi state — keys are best-effort guesses
+window.ethereum = provider;
+// Some apps detect Coinbase Wallet via window.coinbaseWalletExtension
+// or detect multiple providers via window.ethereum.providers
+provider.providers = [provider];
+
+// ---- 2. Pre-seed Aerodrome's wagmi store (key is app-specific) ----
+const wagmiState = {
+    state: {
+        connections: {
+            __type: 'Map',
+            value: [
+                ['injected-stub', {
+                    accounts: [fakeAddr],
+                    chainId: 8453,
+                    connector: {
+                        id: 'injected',
+                        name: 'Injected',
+                        type: 'injected',
+                        uid: 'injected-stub',
+                    },
+                }],
+            ],
+        },
+        chainId: 8453,
+        current: 'injected-stub',
+    },
+    version: 2,
+};
+
 try {
-    localStorage.setItem('wagmi.connected', 'true');
-    localStorage.setItem('wagmi.wallet', 'injected');
+    localStorage.setItem('wagmi-drome-v5.0.0.store', JSON.stringify(wagmiState));
+    localStorage.setItem('@appkit/connection_status', 'connected');
+    localStorage.setItem('@appkit/active_namespace', 'eip155');
+    localStorage.setItem('@appkit/active_caip_network_id', 'eip155:8453');
+    localStorage.setItem('disabledChains', '[]');
 } catch (e) {}
 """
 
