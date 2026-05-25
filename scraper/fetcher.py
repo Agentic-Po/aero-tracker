@@ -126,6 +126,8 @@ def fetch(
     html: Optional[str] = None
     localstorage: Optional[str] = None
 
+    network_log: list[dict] = []
+
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=headless)
         context = browser.new_context(
@@ -135,6 +137,21 @@ def fetch(
         )
         context.add_init_script(_INIT_SCRIPT)
         page = context.new_page()
+
+        if debug:
+            def _log_request(req):
+                # Skip noisy asset categories; keep only interesting traffic
+                if req.resource_type in {"document", "fetch", "xhr", "websocket"}:
+                    entry = {
+                        "method": req.method,
+                        "url": req.url,
+                        "resource_type": req.resource_type,
+                    }
+                    post = req.post_data
+                    if post and len(post) < 2000:
+                        entry["post"] = post
+                    network_log.append(entry)
+            page.on("request", _log_request)
 
         nav_error: Optional[str] = None
         try:
@@ -170,6 +187,11 @@ def fetch(
         if localstorage:
             Path(f"debug_dumps/localstorage_{stamp}.json").write_text(
                 localstorage, encoding="utf-8"
+            )
+        if network_log:
+            import json as _json
+            Path(f"debug_dumps/network_{stamp}.json").write_text(
+                _json.dumps(network_log, indent=2), encoding="utf-8"
             )
 
     if "data-test-amount" not in html:
