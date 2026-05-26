@@ -112,7 +112,7 @@ class VoteSnapshot:
 
 # ---- Web3 + helpers --------------------------------------------------------
 def make_web3() -> Web3:
-    rpc = os.environ.get("BASE_RPC_URL", DEFAULT_BASE_RPC)
+    rpc = os.environ.get("BASE_RPC_URL") or DEFAULT_BASE_RPC
     w3 = Web3(Web3.HTTPProvider(rpc, request_kwargs={"timeout": 30}))
     if not w3.is_connected():
         raise RuntimeError(f"Base RPC unreachable: {rpc}")
