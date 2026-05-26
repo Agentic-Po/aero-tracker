@@ -54,6 +54,8 @@ VOTER_ABI = [
 
 MINTER_ABI = [
     {"inputs":[],"name":"weekly","outputs":[{"type":"uint256","name":""}],"stateMutability":"view","type":"function"},
+    {"inputs":[{"type":"uint256","name":"_minted"}],"name":"calculateGrowth","outputs":[{"type":"uint256","name":""}],"stateMutability":"view","type":"function"},
+    {"inputs":[],"name":"teamRate","outputs":[{"type":"uint256","name":""}],"stateMutability":"view","type":"function"},
 ]
 
 ERC20_DECIMALS_ABI = [
@@ -217,7 +219,21 @@ def read_snapshot(w3: Optional[Web3] = None) -> VoteSnapshot:
     )
 
     total_weight = voter.functions.totalWeight().call()
-    weekly = minter.functions.weekly().call()
+    weekly_gross = minter.functions.weekly().call()
+    growth = minter.functions.calculateGrowth(weekly_gross).call()  # rebase to veAERO lockers
+    team_rate_bps = minter.functions.teamRate().call()              # basis points
+    # Aerodrome's team allocation formula (from Minter.updatePeriod):
+    #   team_emissions = teamRate × (weekly + growth) / (PRECISION - teamRate)
+    # PRECISION = 10000 (basis points).
+    team_emissions = (team_rate_bps * (weekly_gross + growth)) // (10000 - team_rate_bps)
+    weekly_net = weekly_gross - growth - team_emissions
+    print(
+        f"[rpc] weekly_gross={weekly_gross/1e18:,.0f} growth={growth/1e18:,.0f} "
+        f"team_rate={team_rate_bps}bps team_em={team_emissions/1e18:,.0f} "
+        f"net={weekly_net/1e18:,.0f}",
+        flush=True,
+    )
+    weekly = weekly_net   # use the gauge-bound net for all downstream math
     pool_count = voter.functions.length().call()
 
     # Pull all pools' current-epoch data in batches.
