@@ -62,7 +62,6 @@ def run_8h(dry_run: bool) -> int:
             "epoch_number": snap.epoch_number,
             "epoch_starts_at": snap.epoch_starts_at,
             "pool_count": snap.pool_count,
-            "unpriced_token_count": snap.unpriced_token_count,
             "debug": snap.debug,
         },
     )
@@ -93,7 +92,6 @@ def run_8h(dry_run: bool) -> int:
         sim_plus_25k=result.sim_plus_25k,
         sim_plus_50k=result.sim_plus_50k,
         sim_plus_100k=result.sim_plus_100k,
-        unpriced_token_count=snap.unpriced_token_count,
     )
     notify.send(msg)
     print("[8h] telegram posted", flush=True)
