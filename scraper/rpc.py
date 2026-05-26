@@ -261,24 +261,20 @@ def read_snapshot(w3: Optional[Web3] = None) -> VoteSnapshot:
     #   _tail = _weekly < TAIL_START
     #   if _tail: _emission = totalSupply × tailEmissionRate / MAX_BPS
     #   else:     _emission = _weekly
+    # _emission, _growth (rebase to lockers), and _teamEmissions are all minted
+    # SEPARATELY in updatePeriod — _emission is what flows to gauges and is the
+    # number voters care about, matching the frontend's "New Emissions".
     in_tail = weekly_state < TAIL_START
     if in_tail:
         emission_gross = (aero_total_supply * tail_rate) // MAX_BPS
     else:
         emission_gross = weekly_state
-    growth = minter.functions.calculateGrowth(emission_gross).call()
-    team_rate_bps = minter.functions.teamRate().call()
-    # team_emissions = teamRate × (emission + growth) / (MAX_BPS - teamRate)
-    team_emissions = (team_rate_bps * (emission_gross + growth)) // (MAX_BPS - team_rate_bps)
-    weekly_net = emission_gross - growth - team_emissions
     print(
         f"[rpc] weekly_state={weekly_state/1e18:,.4f} in_tail={in_tail} "
-        f"emission_gross={emission_gross/1e18:,.4f} growth={growth/1e18:,.4f} "
-        f"team_rate={team_rate_bps}bps team_em={team_emissions/1e18:,.4f} "
-        f"net={weekly_net/1e18:,.4f}",
+        f"new_emissions={emission_gross/1e18:,.4f}",
         flush=True,
     )
-    weekly = weekly_net   # use the gauge-bound net for all downstream math
+    weekly = emission_gross   # this IS the gauge emission; matches frontend
     pool_count = voter.functions.length().call()
 
     # Pull all pools' current-epoch data in batches.
