@@ -1,0 +1,129 @@
+name: diagnose-lightpanda
+
+# Pure diagnostic — no Python, no Playwright. Install Lightpanda, dump its
+# version + help, then run `lightpanda fetch` directly against a few URLs
+# and upload the raw stdout/stderr for each.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Install Lightpanda
+        run: |
+          curl -L -o lightpanda \
+            https://github.com/lightpanda-io/browser/releases/download/nightly/lightpanda-x86_64-linux
+          chmod +x lightpanda
+          sudo mv lightpanda /usr/local/bin/lightpanda
+
+      - name: Version + help dumps
+        run: |
+          mkdir -p out
+          echo '== lightpanda --version ==' | tee out/00-meta.txt
+          lightpanda --version 2>&1 | tee -a out/00-meta.txt || true
+          echo
+          echo '== lightpanda --help ==' | tee -a out/00-meta.txt
+          lightpanda --help 2>&1 | tee -a out/00-meta.txt || true
+          echo
+          echo '== lightpanda fetch --help ==' | tee -a out/00-meta.txt
+          lightpanda fetch --help 2>&1 | tee -a out/00-meta.txt || true
+          echo
+          echo '== lightpanda serve --help ==' | tee -a out/00-meta.txt
+          lightpanda serve --help 2>&1 | tee -a out/00-meta.txt || true
+
+      - name: Fetch example.com (sanity)
+        run: |
+          set +e
+          lightpanda fetch --dump html https://example.com \
+            > out/10-example.html 2> out/10-example.stderr
+          echo "exit=$?  bytes=$(wc -c < out/10-example.html)" > out/10-example.meta
+
+      - name: Fetch aerodrome.finance/ (homepage)
+        run: |
+          set +e
+          lightpanda fetch \
+            --dump html \
+            --wait-until networkidle \
+            --wait-ms 20000 \
+            --http-timeout 20000 \
+            https://aerodrome.finance/ \
+            > out/20-home.html 2> out/20-home.stderr
+          echo "exit=$?  bytes=$(wc -c < out/20-home.html)" > out/20-home.meta
+
+      - name: Fetch aerodrome.finance/vote (target)
+        run: |
+          set +e
+          lightpanda fetch \
+            --dump html \
+            --wait-until networkidle \
+            --wait-ms 20000 \
+            --http-timeout 20000 \
+            https://aerodrome.finance/vote \
+            > out/30-vote.html 2> out/30-vote.stderr
+          echo "exit=$?  bytes=$(wc -c < out/30-vote.html)" > out/30-vote.meta
+          echo
+          echo '-- grep for data-test-amount --' >> out/30-vote.meta
+          grep -c 'data-test-amount' out/30-vote.html >> out/30-vote.meta 2>&1 || true
+          echo '-- grep for connect wallet text --' >> out/30-vote.meta
+          grep -c -i 'Connect a wallet\|WalletConnect\|Browser Wallet' out/30-vote.html >> out/30-vote.meta 2>&1 || true
+
+      - name: Fetch aerodrome.finance/pools (alternative)
+        run: |
+          set +e
+          lightpanda fetch \
+            --dump html \
+            --wait-until networkidle \
+            --wait-ms 20000 \
+            --http-timeout 20000 \
+            https://aerodrome.finance/pools \
+            > out/40-pools.html 2> out/40-pools.stderr
+          echo "exit=$?  bytes=$(wc -c < out/40-pools.html)" > out/40-pools.meta
+          echo
+          echo '-- grep for data-test-amount --' >> out/40-pools.meta
+          grep -c 'data-test-amount' out/40-pools.html >> out/40-pools.meta 2>&1 || true
+
+      - name: Try longer wait (60s)
+        run: |
+          set +e
+          lightpanda fetch \
+            --dump html \
+            --wait-until networkidle \
+            --wait-ms 60000 \
+            --http-timeout 30000 \
+            https://aerodrome.finance/vote \
+            > out/50-vote-long.html 2> out/50-vote-long.stderr
+          echo "exit=$?  bytes=$(wc -c < out/50-vote-long.html)" > out/50-vote-long.meta
+          echo
+          echo '-- grep for data-test-amount --' >> out/50-vote-long.meta
+          grep -c 'data-test-amount' out/50-vote-long.html >> out/50-vote-long.meta 2>&1 || true
+
+      - name: Test serve mode (CDP endpoint)
+        run: |
+          set +e
+          lightpanda serve --host 127.0.0.1 --port 9222 \
+            > out/60-serve.stdout 2> out/60-serve.stderr &
+          SERVE_PID=$!
+          sleep 5
+          echo "== process status ==" > out/60-serve.meta
+          ps -p $SERVE_PID -o pid,cmd >> out/60-serve.meta 2>&1 || echo "process died" >> out/60-serve.meta
+          echo
+          echo "== curl /json/version ==" >> out/60-serve.meta
+          curl -sS --max-time 5 http://127.0.0.1:9222/json/version >> out/60-serve.meta 2>&1 || true
+          echo
+          echo "== curl /json/list ==" >> out/60-serve.meta
+          curl -sS --max-time 5 http://127.0.0.1:9222/json/list >> out/60-serve.meta 2>&1 || true
+          echo
+          echo "== curl /json ==" >> out/60-serve.meta
+          curl -sS --max-time 5 http://127.0.0.1:9222/json >> out/60-serve.meta 2>&1 || true
+          kill $SERVE_PID 2>/dev/null || true
+          wait $SERVE_PID 2>/dev/null || true
+
+      - name: Upload diagnostic artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lightpanda-diagnose-${{ github.run_id }}
+          path: out/
