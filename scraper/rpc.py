@@ -198,11 +198,13 @@ def read_snapshot(w3: Optional[Web3] = None) -> VoteSnapshot:
         pools = chain.get_pools()
         epochs = chain.get_latest_pool_epochs()
 
-    # Defensive: a small number of pools return inflated amount_in_stable
-    # values (likely a price/decimals edge case for one obscure token).
-    # Cap any single pool's contribution at $100M — the highest legitimate
-    # Aerodrome pool earns ~$200k/epoch, so $100M is a generous outlier gate.
-    PER_POOL_CAP = 100_000_000.0
+    # Defensive: pools with thinly-traded tokens get bad on-chain oracle prices,
+    # producing absurd amount_in_stable values. The highest legitimate Aerodrome
+    # pool earns ~$200k of fees per epoch (verified by inspecting frontend
+    # screenshot). $500k is a tight cap that excludes obvious outliers
+    # (we've seen $25M from a single CL pool with a stale price) but never
+    # truncates real top earners.
+    PER_POOL_CAP = 500_000.0
 
     # Classify pools by type for diagnostics.
     #  type == -1  → v2 volatile
@@ -260,10 +262,16 @@ def read_snapshot(w3: Optional[Web3] = None) -> VoteSnapshot:
         + ", ".join(f"{a[:8]}…(t={t})=${b:,.0f}" for a, b, t in fees_top[:5]),
         flush=True,
     )
+    # Full addresses of fee outliers, so we can investigate token pricing
+    outliers = [(a, b, t) for a, b, t in fees_top if b > PER_POOL_CAP]
+    if outliers:
+        print(f"[rpc] fee OUTLIERS (full addrs): {outliers[:5]}", flush=True)
 
     # Same outlier filter for incentives — a single pool's bribe with a bad
-    # price feed can inflate the total by 1000×.
-    PER_POOL_INC_CAP = 10_000_000.0
+    # price feed can inflate the total by 1000×. Frontend shows $8k total
+    # incentives across all pools, so individual pool incentives should be
+    # small ($1k typical, $100k extreme). Cap at $500k to catch outliers.
+    PER_POOL_INC_CAP = 500_000.0
     incentive_contributors: list[tuple[str, float]] = []
     incentives_skipped = 0
     total_incentives = 0.0
