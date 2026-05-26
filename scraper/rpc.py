@@ -156,32 +156,60 @@ def read_snapshot(w3: Optional[Web3] = None) -> VoteSnapshot:
     # Aerodrome pool earns ~$200k/epoch, so $100M is a generous outlier gate.
     PER_POOL_CAP = 100_000_000.0
 
+    # Classify pools by type for diagnostics.
+    #  type == -1  → v2 volatile
+    #  type ==  0  → v2 stable
+    #  type >   0  → CL (concentrated liquidity, tick spacing)
+    from collections import Counter
+    type_count = Counter()
+    type_fees = Counter()       # USD by type bucket
     alive_pool_count = 0
+    alive_no_fee_count = 0
     fees_skipped = 0
-    fees_top: list[tuple[str, float]] = []
+    fees_top: list[tuple[str, float, int]] = []
     total_fees = 0.0
     for p in pools:
+        ptype = getattr(p, "type", None)
+        if ptype is None:
+            ptype = -99
+        if ptype == -1:
+            bucket = "v2_vol"
+        elif ptype == 0:
+            bucket = "v2_stab"
+        elif ptype > 0:
+            bucket = f"CL_{ptype}"
+        else:
+            bucket = "unknown"
+        type_count[bucket] += 1
         if not getattr(p, "gauge_alive", True):
             continue
         alive_pool_count += 1
         fee_usd = float(p.total_fees or 0)
         if fee_usd > PER_POOL_CAP:
             fees_skipped += 1
-            fees_top.append((getattr(p, "lp", "?"), fee_usd))
             continue
+        if fee_usd <= 0:
+            alive_no_fee_count += 1
+        else:
+            type_fees[bucket] += fee_usd
+            fees_top.append((getattr(p, "lp", "?"), fee_usd, ptype))
         total_fees += fee_usd
-        if fee_usd > 0:
-            fees_top.append((getattr(p, "lp", "?"), fee_usd))
 
     fees_top.sort(key=lambda x: x[1], reverse=True)
     print(
-        f"[rpc] sugar-sdk: {len(pools)} pools, {alive_pool_count} alive, "
-        f"{fees_skipped} fee-outliers skipped, {len(epochs)} pool-epochs",
+        f"[rpc] sugar-sdk: {len(pools)} pools "
+        f"({dict(type_count.most_common())}), "
+        f"{alive_pool_count} alive ({alive_no_fee_count} with $0 fees), "
+        f"{fees_skipped} outliers skipped, {len(epochs)} pool-epochs",
+        flush=True,
+    )
+    print(
+        f"[rpc] fees by type: {dict(type_fees.most_common())}",
         flush=True,
     )
     print(
         f"[rpc] top 5 fee contributors: "
-        + ", ".join(f"{a[:8]}…=${b:,.0f}" for a, b in fees_top[:5]),
+        + ", ".join(f"{a[:8]}…(t={t})=${b:,.0f}" for a, b, t in fees_top[:5]),
         flush=True,
     )
 
