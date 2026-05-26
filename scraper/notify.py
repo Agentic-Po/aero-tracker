@@ -76,23 +76,22 @@ def format_8h_message(
     lines = [
         title,
         "",
-        "<b>✓ EXACT (verified vs Aerodrome /vote):</b>",
+        "<b>✓ MATCHES Aerodrome /vote:</b>",
         f"Total VP:       {_fmt_precise(total_voting_power)} veAERO",
         f"New Emissions:  {_fmt_precise(new_emissions)} AERO",
         f"AERO price:     ${aero_price_usd:,.4f}",
         f"Emissions val:  ${_fmt_precise(emissions_value)}",
-        "",
-        "<b>⚠ REFINING (LpSugar.all() rewrite pending):</b>",
-        f"Total Fees:     ${_fmt_precise(total_fees)}",
         f"Incentives:     ${_fmt_precise(total_incentives)}",
+        "",
+        "<b>⚠ Partial (v2 pools only — CL pool fees still missing):</b>",
+        f"Total Fees:     ${_fmt_precise(total_fees)}",
         f"Total Rewards:  ${_fmt_precise(total_rewards)}",
         f"Multiplier:     {multiplier:.3f}×{delta}{warn}",
         "",
-        "<i>Phase 1.2 — TVP + Emissions match frontend exactly. "
-        "Fees/Incentives still ~14× and ~3× low; rewriting via LpSugar.all() + per-pool bribe reads in next iteration.</i>",
+        "<i>Phase 2.2 — using velodrome-finance/sugar-sdk. "
+        "Total Fees currently sums v2 pools only (8,993 v2 / 0 CL returned by SDK). "
+        "Slipstream/CL pool fees will be added in Phase 3.</i>",
     ]
-    if unpriced_token_count:
-        lines.append(f"<i>({unpriced_token_count} reward token(s) had no price and were skipped)</i>")
     return "\n".join(lines)
 
 
