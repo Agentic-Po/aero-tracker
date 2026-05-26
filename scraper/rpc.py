@@ -189,6 +189,12 @@ def read_snapshot(w3: Optional[Web3] = None) -> VoteSnapshot:
     os.environ["SUGAR_RPC_URI_8453"] = _rpc_url()
     from sugar.chains import BaseChain  # imported here so import errors are loud
     with BaseChain() as chain:
+        # Diagnostic confirmed: Aerodrome's FactoryRegistry exposes 4 factories
+        # totalling ~33k pools (v2: 27664, CL ~5657). The SDK's default Base
+        # `pools_count_upper_bound = 9000` clips us inside the v2 factory and
+        # misses CL pools entirely. Lift the cap so SDK paginates through the
+        # whole registry.
+        chain.settings.pools_count_upper_bound = 100_000
         pools = chain.get_pools()
         epochs = chain.get_latest_pool_epochs()
 
