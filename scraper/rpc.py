@@ -261,7 +261,28 @@ def read_snapshot(w3: Optional[Web3] = None) -> VoteSnapshot:
         flush=True,
     )
 
-    total_incentives = sum(float(ep.total_incentives) for ep in epochs)
+    # Same outlier filter for incentives — a single pool's bribe with a bad
+    # price feed can inflate the total by 1000×.
+    PER_POOL_INC_CAP = 10_000_000.0
+    incentive_contributors: list[tuple[str, float]] = []
+    incentives_skipped = 0
+    total_incentives = 0.0
+    for ep in epochs:
+        inc_usd = float(ep.total_incentives or 0)
+        if inc_usd > PER_POOL_INC_CAP:
+            incentives_skipped += 1
+            incentive_contributors.append((getattr(ep, "lp", "?"), inc_usd))
+            continue
+        if inc_usd > 0:
+            incentive_contributors.append((getattr(ep, "lp", "?"), inc_usd))
+        total_incentives += inc_usd
+    incentive_contributors.sort(key=lambda x: x[1], reverse=True)
+    print(
+        f"[rpc] incentives: {incentives_skipped} outliers skipped, "
+        f"top 5: " + ", ".join(f"{a[:8]}…=${b:,.0f}" for a, b in incentive_contributors[:5]),
+        flush=True,
+    )
+
     print(
         f"[rpc] totals: fees=${total_fees:,.2f} incentives=${total_incentives:,.2f}",
         flush=True,
