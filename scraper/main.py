@@ -3,7 +3,7 @@
 Usage:
   python -m scraper.main --mode 8h
   python -m scraper.main --mode epoch
-  python -m scraper.main --mode 8h --dry-run        # print, don't write or notify
+  python -m scraper.main --mode 8h --dry-run        # no DB write, no TG post
 """
 
 from __future__ import annotations
@@ -15,40 +15,33 @@ from dataclasses import asdict
 
 from dotenv import load_dotenv
 
-from scraper import fetcher, notify, parse, price, store
-from scraper.multiplier import compute as compute_multiplier
-
-VOTE_URL = "https://aerodrome.finance/vote"
-
-# Heuristic: pairs containing these tokens are considered "Ignition" pools.
-# Aerodrome periodically promotes new pools as Ignition; refine this list as needed.
-IGNITION_HINTS = {"IGN", "IGNITION"}
-
-
-def _is_ignition(pair: str) -> bool:
-    p = pair.upper()
-    return any(hint in p for hint in IGNITION_HINTS)
+from scraper import notify, rpc, store
+from scraper.multiplier import compute as compute_multiplier_metrics
 
 
 def run_8h(dry_run: bool) -> int:
-    print(f"[8h] fetching {VOTE_URL}", flush=True)
-    html = fetcher.fetch(VOTE_URL)
-    page = parse.parse_summary(html)
-    print(f"[8h] parsed summary: {page}", flush=True)
-
-    aero_price = price.get_aero_usd()
-    print(f"[8h] AERO price: ${aero_price}", flush=True)
-
-    result = compute_multiplier(
-        new_emissions=page.new_emissions,
-        aero_price_usd=aero_price,
-        total_rewards=page.total_rewards,
+    print("[8h] reading Aerodrome state from Base RPC", flush=True)
+    snap = rpc.read_snapshot()
+    print(
+        f"[8h] epoch={snap.epoch_number} starts_at={snap.epoch_starts_at} "
+        f"VP={snap.total_voting_power:,.0f} new_em={snap.new_emissions:,.0f} "
+        f"aero=${snap.aero_price_usd:.4f} fees=${snap.total_fees:,.0f} "
+        f"incentives=${snap.total_incentives:,.0f} rewards=${snap.total_rewards:,.0f} "
+        f"mult={snap.multiplier:.3f} pools={snap.pool_count} "
+        f"unpriced_tokens={snap.unpriced_token_count}",
+        flush=True,
     )
-    print(f"[8h] multiplier: {result.multiplier:.4f}", flush=True)
+
+    # Run the standard simulation math against the same emissions_value / rewards.
+    result = compute_multiplier_metrics(
+        new_emissions=snap.new_emissions,
+        aero_price_usd=snap.aero_price_usd,
+        total_rewards=snap.total_rewards,
+    )
 
     if dry_run:
         print("[8h] DRY RUN — skipping DB write and Telegram post")
-        print(json.dumps({"summary": page.__dict__ | {"pools": []}, **result.to_dict()}, indent=2, default=str))
+        print(json.dumps({**asdict(snap), **result.to_dict()}, indent=2, default=str))
         return 0
 
     sb = store.client()
@@ -58,18 +51,25 @@ def run_8h(dry_run: bool) -> int:
         aero_price_usd=result.aero_price_usd,
         emissions_value=result.emissions_value,
         total_rewards=result.total_rewards,
-        total_fees=page.total_fees,
-        total_incentives=page.total_incentives,
-        total_voting_power=page.total_voting_power,
+        total_fees=snap.total_fees,
+        total_incentives=snap.total_incentives,
+        total_voting_power=snap.total_voting_power,
         multiplier=result.multiplier,
         sim_plus_1k=result.sim_plus_1k,
         sim_plus_25k=result.sim_plus_25k,
         sim_plus_50k=result.sim_plus_50k,
         sim_plus_100k=result.sim_plus_100k,
-        raw={"page": page.__dict__ | {"pools": []}},
+        raw={
+            "epoch_number": snap.epoch_number,
+            "epoch_starts_at": snap.epoch_starts_at,
+            "pool_count": snap.pool_count,
+            "unpriced_token_count": snap.unpriced_token_count,
+            "debug": snap.debug,
+        },
     )
     print(f"[8h] inserted snapshot id={snapshot_id}", flush=True)
 
+    # Previous multiplier for delta display
     prev = (
         sb.table("snapshots_8h")
         .select("multiplier")
@@ -78,14 +78,15 @@ def run_8h(dry_run: bool) -> int:
         .limit(1)
         .execute()
     )
-    prev_mult = prev.data[0]["multiplier"] if prev.data else None
+    prev_mult = float(prev.data[0]["multiplier"]) if prev.data else None
 
     msg = notify.format_8h_message(
+        epoch_number=snap.epoch_number,
         multiplier=result.multiplier,
-        prev_multiplier=float(prev_mult) if prev_mult is not None else None,
-        total_voting_power=page.total_voting_power,
-        total_fees=page.total_fees,
-        total_incentives=page.total_incentives,
+        prev_multiplier=prev_mult,
+        total_voting_power=snap.total_voting_power,
+        total_fees=snap.total_fees,
+        total_incentives=snap.total_incentives,
         total_rewards=result.total_rewards,
         new_emissions=result.new_emissions,
         aero_price_usd=result.aero_price_usd,
@@ -93,6 +94,7 @@ def run_8h(dry_run: bool) -> int:
         sim_plus_25k=result.sim_plus_25k,
         sim_plus_50k=result.sim_plus_50k,
         sim_plus_100k=result.sim_plus_100k,
+        unpriced_token_count=snap.unpriced_token_count,
     )
     notify.send(msg)
     print("[8h] telegram posted", flush=True)
@@ -100,50 +102,95 @@ def run_8h(dry_run: bool) -> int:
 
 
 def run_epoch(dry_run: bool) -> int:
-    print(f"[epoch] fetching {VOTE_URL}", flush=True)
-    html = fetcher.fetch(VOTE_URL)
-    page = parse.parse_full(html)
+    """Per-epoch snapshot at Wed 23:00 UTC.
 
-    if not page.pools:
-        print("[epoch] no pools parsed — aborting", file=sys.stderr)
+    Phase 1: capture the same numbers as the 8h snapshot, plus the winning
+    pool (largest vote weight). Pool-by-pool vote weights are derived from the
+    LpEpoch.votes field returned by RewardsSugar.epochsLatest().
+    """
+    from scraper.rpc import REWARDS_SUGAR, REWARDS_SUGAR_ABI, make_web3
+    from web3 import Web3
+
+    print("[epoch] reading Aerodrome state from Base RPC", flush=True)
+    snap = rpc.read_snapshot()
+
+    w3 = make_web3()
+    sugar = w3.eth.contract(address=Web3.to_checksum_address(REWARDS_SUGAR), abi=REWARDS_SUGAR_ABI)
+
+    # Re-fetch epochs to find the pool with the largest vote weight
+    epochs = []
+    BATCH = 100
+    offset = 0
+    safety = 0
+    while safety < 50:
+        safety += 1
+        try:
+            batch = sugar.functions.epochsLatest(BATCH, offset).call()
+        except Exception:
+            if BATCH > 20:
+                BATCH = 20
+                continue
+            raise
+        if not batch:
+            break
+        epochs.extend(batch)
+        if len(batch) < BATCH:
+            break
+        offset += BATCH
+
+    if not epochs:
+        print("[epoch] no pool epoch data — aborting", file=sys.stderr)
         return 2
 
-    winner = max(page.pools, key=lambda p: p.votes)
-    total_votes = page.total_voting_power or sum(p.votes for p in page.pools)
-    pct = (winner.votes / total_votes) * 100 if total_votes else 0.0
-    is_ign = _is_ignition(winner.pair)
+    # Pick the pool with the highest votes (LpEpoch.votes is index 2)
+    winner_epoch = max(epochs, key=lambda e: e[2])
+    winner_pool = winner_epoch[1]
+    winner_votes_raw = winner_epoch[2]
+    total_votes_raw = sum(e[2] for e in epochs) or 1
+    winner_votes = winner_votes_raw / 1e18
+    total_votes = total_votes_raw / 1e18
+    pct = (winner_votes / total_votes) * 100.0
 
     print(
-        f"[epoch] winner: {winner.pair} votes={winner.votes:,.0f} "
-        f"pct={pct:.2f}% ignition={is_ign}",
+        f"[epoch] winner pool={winner_pool} votes={winner_votes:,.0f} "
+        f"pct={pct:.2f}%",
         flush=True,
     )
 
     if dry_run:
         print("[epoch] DRY RUN — skipping DB write and Telegram post")
-        print(json.dumps({"winner": asdict(winner), "total_votes": total_votes, "pct": pct, "is_ignition": is_ign}, indent=2))
+        print(json.dumps({
+            "winner_pool": winner_pool,
+            "winner_votes": winner_votes,
+            "total_votes": total_votes,
+            "pct": pct,
+            **asdict(snap),
+        }, indent=2, default=str))
         return 0
 
     sb = store.client()
     store.insert_epoch_winner(
         sb,
-        epoch_number=None,
-        pair=winner.pair,
-        pool_address=winner.pool_address,
-        votes=winner.votes,
+        epoch_number=snap.epoch_number,
+        pair=winner_pool,                # we don't have a friendly symbol yet
+        pool_address=winner_pool,
+        votes=winner_votes,
         total_votes=total_votes,
         pct_of_total=pct,
-        is_ignition=is_ign,
-        raw={"all_pools": [asdict(p) for p in page.pools]},
+        is_ignition=False,               # TODO: enrich with LpSugar.byAddress(pool).symbol
+        raw={
+            "epoch_starts_at": snap.epoch_starts_at,
+            "pool_count": snap.pool_count,
+        },
     )
 
     msg = notify.format_epoch_winner_message(
-        epoch_number=None,
-        pair=winner.pair,
-        votes=winner.votes,
+        epoch_number=snap.epoch_number,
+        pair=winner_pool,
+        votes=winner_votes,
         total_votes=total_votes,
         pct_of_total=pct,
-        is_ignition=is_ign,
+        is_ignition=False,
     )
     notify.send(msg)
     print("[epoch] telegram posted", flush=True)

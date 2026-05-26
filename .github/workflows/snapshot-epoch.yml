@@ -13,14 +13,12 @@ on:
 jobs:
   snapshot:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 6
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
           cache: 'pip'
@@ -28,32 +26,17 @@ jobs:
       - name: Install Python deps
         run: pip install -r requirements.txt
 
-      - name: Install Lightpanda
-        run: |
-          curl -L -o lightpanda \
-            https://github.com/lightpanda-io/browser/releases/download/nightly/lightpanda-x86_64-linux
-          chmod +x lightpanda
-          sudo mv lightpanda /usr/local/bin/lightpanda
-          lightpanda --version 2>&1 | head -5 || true
-
       - name: Run epoch snapshot
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          DEBUG_DUMP_HTML: '1'
+          BASE_RPC_URL: ${{ secrets.BASE_RPC_URL }}
+          COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
         run: |
           if [ "${{ inputs.dry_run }}" = "true" ]; then
             python -m scraper.main --mode epoch --dry-run
           else
             python -m scraper.main --mode epoch
           fi
-
-      - name: Upload debug HTML
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: debug-html-epoch-${{ github.run_id }}
-          path: debug_dumps/
-          if-no-files-found: ignore

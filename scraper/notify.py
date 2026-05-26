@@ -37,6 +37,7 @@ def send(text: str, *, parse_mode: str = "HTML", disable_preview: bool = True) -
 
 def format_8h_message(
     *,
+    epoch_number: int | None = None,
     multiplier: float,
     prev_multiplier: float | None,
     total_voting_power: float | None,
@@ -49,6 +50,7 @@ def format_8h_message(
     sim_plus_25k: float,
     sim_plus_50k: float,
     sim_plus_100k: float,
+    unpriced_token_count: int = 0,
 ) -> str:
     delta = ""
     if prev_multiplier is not None:
@@ -58,24 +60,31 @@ def format_8h_message(
 
     warn = "  ⚠️ <b>below 1.1</b>" if multiplier < 1.1 else ""
 
+    title = "<b>Aero Multiplier · 8h snapshot</b>"
+    if epoch_number is not None:
+        title += f" · ep{epoch_number}"
+
     lines = [
-        f"<b>Aero Multiplier · 8h snapshot</b>",
-        f"",
+        title,
+        "",
         f"<b>Multiplier:</b> {multiplier:.3f}×{delta}{warn}",
         f"<b>AERO price:</b> ${aero_price_usd:,.4f}",
-        f"",
-        f"Total VP:     {_fmt_num(total_voting_power) if total_voting_power else '—'}",
-        f"Total Fees:   ${_fmt_num(total_fees) if total_fees else '—'}",
-        f"Incentives:   ${_fmt_num(total_incentives) if total_incentives else '—'}",
-        f"Total Rewards:${_fmt_num(total_rewards)}",
-        f"New Emissions:{_fmt_num(new_emissions)} AERO",
-        f"",
-        f"<b>If incentives +$:</b>",
+        "",
+        f"Total VP:      {_fmt_num(total_voting_power) if total_voting_power else '—'} veAERO",
+        f"Total Fees:    ${_fmt_num(total_fees) if total_fees else '—'}",
+        f"Incentives:    ${_fmt_num(total_incentives) if total_incentives else '—'}",
+        f"Total Rewards: ${_fmt_num(total_rewards)}",
+        f"New Emissions: {_fmt_num(new_emissions)} AERO",
+        "",
+        "<b>If incentives +$:</b>",
         f"  +1k    → {sim_plus_1k:.3f}×",
         f"  +25k   → {sim_plus_25k:.3f}×",
         f"  +50k   → {sim_plus_50k:.3f}×",
         f"  +100k  → {sim_plus_100k:.3f}×",
     ]
+    if unpriced_token_count:
+        lines.append("")
+        lines.append(f"<i>note: {unpriced_token_count} reward token(s) had no CoinGecko price and were skipped</i>")
     return "\n".join(lines)
 
 

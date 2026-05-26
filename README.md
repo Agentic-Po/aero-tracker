@@ -1,52 +1,57 @@
 # aero-tracker
 
-Scheduled scraper for [Aerodrome Finance](https://aerodrome.finance/vote) on Base. Computes the AERO emissions multiplier, snapshots the per-epoch vote winner, persists to Supabase, and pushes updates to a Telegram channel.
+Reads [Aerodrome Finance](https://aerodrome.finance/vote) vote state directly from Base mainnet RPC, computes the AERO emissions multiplier, persists to Supabase, and pushes updates to a Telegram channel.
 
 Companion dashboard: [aero-tracker-web](https://github.com/Agentic-Po/aero-tracker-web).
 
+## Why RPC and not scraping
+
+The Aerodrome `/vote` page is a JS-rendered SPA gated by a wallet-connect overlay in v5. Headless scraping (Lightpanda, Playwright + stubs) hits the gate; Reown AppKit explicitly disables the injected provider path, so window.ethereum stubs are ignored.
+
+But we don't need to scrape — Aerodrome's frontend has **no off-chain API**. Every numeric value on `/vote` is computed client-side from on-chain reads via DRPC against the Voter, Minter, and Sugar contracts. By hitting the same RPC URL with the same contract calls, we get bit-identical numbers to what a connected-wallet user sees in the browser.
+
 ## What it does
 
-Two scheduled jobs, both running on GitHub Actions:
+Two scheduled jobs on GitHub Actions, both reading Base RPC directly:
 
 | Job | Schedule (UTC) | What it captures |
 |---|---|---|
-| `snapshot-8h` | `5 */8 * * *` (every 8h at :05) | Total voting power, total fees, total incentives, total rewards, new emission, AERO price, computed multiplier, and simulated multipliers at +$1k / +$25k / +$50k / +$100k incentives |
-| `snapshot-epoch` | `0 23 * * 3` (Wednesdays 23:00 UTC, 1h before epoch flip) | The pool with the largest vote weight: pair, vote count, % of total votes, and whether it's the Aerodrome Ignition pool |
+| `snapshot-8h` | `5 */8 * * *` | Total voting power, total fees, total incentives, total rewards, new emissions, AERO price, multiplier, and +$1k/$25k/$50k/$100k simulations |
+| `snapshot-epoch` | `0 23 * * 3` (Wed 23:00 UTC) | The pool with the largest vote weight: pair, vote count, % of total votes |
 
-All numbers are pulled from the Aerodrome frontend (via [Lightpanda](https://lightpanda.io/) — the public `/vote` page is JS-rendered and Cloudflare-protected). AERO price comes from CoinGecko.
+## Stack
+
+- **Cron:** GitHub Actions (no personal hardware)
+- **Data:** Base mainnet RPC (default: the same `lb.drpc.live/base` endpoint Aerodrome's frontend uses, overridable via `BASE_RPC_URL` secret)
+- **Read contracts (Base):**
+  - Voter: `0x16613524e02ad97eDfeF371bC883F2F5d6C480A5`
+  - Minter: `0xeB018363F0a9Af8f91F06FEe6613a751b2A33FE5`
+  - LpSugar: `0x69dD9db6d8f8E7d83887A704f447b1a584b599A1`
+  - RewardsSugar: `0x1b121EfDaF4ABb8785a315C51D29BCE0552A7678`
+- **Prices:** CoinGecko (`/simple/token_price/base` for reward tokens, `/simple/price` for AERO)
+- **Storage:** Supabase Postgres
+- **Push:** Telegram Bot API → [@devAerodromeM](https://t.me/devAerodromeM) (dev) → [@AeroEmissionMultiplier](https://t.me/AeroEmissionMultiplier) (prod when stable)
 
 ## Multiplier formula
 
 ```
-emissions_value = new_emissions × AERO_price_usd
+emissions_value = new_emissions × AERO_price
 multiplier      = emissions_value ÷ total_rewards
 ```
 
+Where `total_rewards = total_fees + total_incentives`, both in USD, summed across all pools using the current epoch's `LpEpoch` data from `RewardsSugar.epochsLatest()`.
+
 The dashboard warns when the multiplier drops below **1.1**.
-
-## Stack
-
-- **Compute / cron:** GitHub Actions (free, public, no personal hardware)
-- **Scrape:** Lightpanda CLI (headless browser, ~10x lighter than Chromium)
-- **Storage:** Supabase Postgres (single source of truth)
-- **Push:** Telegram Bot API → [@devAerodromeM](https://t.me/devAerodromeM) (dev), [@AeroEmissionMultiplier](https://t.me/AeroEmissionMultiplier) (prod)
 
 ## Local development
 
 ```bash
 pip install -r requirements.txt
-cp .env.example .env  # then fill in values
+cp .env.example .env  # fill in values
 python -m scraper.main --mode 8h --dry-run
 ```
 
-`--dry-run` skips DB writes and Telegram posts; it prints the parsed values to stdout.
-
-## Deploy
-
-1. Fork or clone this repo
-2. Create a Supabase project, run `sql/migrations/0001_init.sql` in the SQL editor
-3. Set GitHub Actions secrets (see `.env.example` for the full list)
-4. The workflows run automatically; `workflow_dispatch` lets you trigger manually for testing
+`--dry-run` prints the snapshot JSON without writing to DB or posting to Telegram.
 
 ## License
 
