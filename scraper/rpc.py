@@ -128,46 +128,64 @@ def _coingecko_headers() -> dict:
 
 
 def get_aero_price_usd() -> float:
+    """AERO/USD from DefiLlama (same source as the token-price batch)."""
     resp = requests.get(
-        "https://api.coingecko.com/api/v3/simple/price",
-        params={"ids": "aerodrome-finance", "vs_currencies": "usd"},
-        headers=_coingecko_headers(),
+        f"https://coins.llama.fi/prices/current/base:{AERO_TOKEN.lower()}",
         timeout=15,
     )
     resp.raise_for_status()
-    return float(resp.json()["aerodrome-finance"]["usd"])
+    coins = resp.json().get("coins") or {}
+    key = f"base:{AERO_TOKEN.lower()}"
+    price = coins.get(key, {}).get("price")
+    if price is None:
+        # CoinGecko fallback
+        cg = requests.get(
+            "https://api.coingecko.com/api/v3/simple/price",
+            params={"ids": "aerodrome-finance", "vs_currencies": "usd"},
+            headers=_coingecko_headers(),
+            timeout=15,
+        )
+        cg.raise_for_status()
+        return float(cg.json()["aerodrome-finance"]["usd"])
+    return float(price)
 
 
 def fetch_token_prices_usd(tokens: set[str]) -> dict[str, float]:
-    """CoinGecko Base token-price batch. Returns lowercase-address → USD."""
+    """DefiLlama batch token-price endpoint. Returns lowercase-address → USD.
+
+    DefiLlama has wider DeFi-token coverage than CoinGecko (which returned 400
+    for our token list), no API key required, and accepts comma-separated keys
+    in a single GET. Output uses `base:0x...` keys.
+    """
     if not tokens:
         return {}
     out: dict[str, float] = {}
     addrs = sorted(t.lower() for t in tokens)
-    # CoinGecko caps token batch to ~100 — chunk to be safe
-    CHUNK = 80
+    # DefiLlama can handle hundreds in one call but keep chunks modest for URL length
+    CHUNK = 50
     for i in range(0, len(addrs), CHUNK):
         chunk = addrs[i:i + CHUNK]
+        keys = ",".join(f"base:{a}" for a in chunk)
         resp = requests.get(
-            "https://api.coingecko.com/api/v3/simple/token_price/base",
-            params={"contract_addresses": ",".join(chunk), "vs_currencies": "usd"},
-            headers=_coingecko_headers(),
+            f"https://coins.llama.fi/prices/current/{keys}",
             timeout=30,
         )
         if resp.status_code == 429:
-            # Polite back-off; CoinGecko free tier is rate-limited
-            import time; time.sleep(30)
+            import time; time.sleep(15)
             resp = requests.get(
-                "https://api.coingecko.com/api/v3/simple/token_price/base",
-                params={"contract_addresses": ",".join(chunk), "vs_currencies": "usd"},
-                headers=_coingecko_headers(),
+                f"https://coins.llama.fi/prices/current/{keys}",
                 timeout=30,
             )
-        resp.raise_for_status()
-        for addr, body in resp.json().items():
-            price = body.get("usd")
-            if price is not None:
-                out[addr.lower()] = float(price)
+        if resp.status_code >= 400:
+            # Skip silently — we'll just count these tokens as unpriced
+            continue
+        for key, body in (resp.json().get("coins") or {}).items():
+            price = body.get("price")
+            if price is None:
+                continue
+            # key is "base:0xAddr" — strip the chain prefix
+            addr = key.split(":", 1)[-1].lower()
+            out[addr] = float(price)
     return out
 
 
