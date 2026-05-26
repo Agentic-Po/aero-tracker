@@ -149,11 +149,45 @@ def read_snapshot(w3: Optional[Web3] = None) -> VoteSnapshot:
     with BaseChain() as chain:
         pools = chain.get_pools()
         epochs = chain.get_latest_pool_epochs()
-    total_fees = sum(float(p.total_fees) for p in pools if p.total_fees)
+
+    # Defensive: a small number of pools return inflated amount_in_stable
+    # values (likely a price/decimals edge case for one obscure token).
+    # Cap any single pool's contribution at $100M — the highest legitimate
+    # Aerodrome pool earns ~$200k/epoch, so $100M is a generous outlier gate.
+    PER_POOL_CAP = 100_000_000.0
+
+    alive_pool_count = 0
+    fees_skipped = 0
+    fees_top: list[tuple[str, float]] = []
+    total_fees = 0.0
+    for p in pools:
+        if not getattr(p, "gauge_alive", True):
+            continue
+        alive_pool_count += 1
+        fee_usd = float(p.total_fees or 0)
+        if fee_usd > PER_POOL_CAP:
+            fees_skipped += 1
+            fees_top.append((getattr(p, "lp", "?"), fee_usd))
+            continue
+        total_fees += fee_usd
+        if fee_usd > 0:
+            fees_top.append((getattr(p, "lp", "?"), fee_usd))
+
+    fees_top.sort(key=lambda x: x[1], reverse=True)
+    print(
+        f"[rpc] sugar-sdk: {len(pools)} pools, {alive_pool_count} alive, "
+        f"{fees_skipped} fee-outliers skipped, {len(epochs)} pool-epochs",
+        flush=True,
+    )
+    print(
+        f"[rpc] top 5 fee contributors: "
+        + ", ".join(f"{a[:8]}…=${b:,.0f}" for a, b in fees_top[:5]),
+        flush=True,
+    )
+
     total_incentives = sum(float(ep.total_incentives) for ep in epochs)
     print(
-        f"[rpc] sugar-sdk: {len(pools)} pools, {len(epochs)} pool-epochs · "
-        f"fees=${total_fees:,.2f} incentives=${total_incentives:,.2f}",
+        f"[rpc] totals: fees=${total_fees:,.2f} incentives=${total_incentives:,.2f}",
         flush=True,
     )
 
