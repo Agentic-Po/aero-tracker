@@ -52,6 +52,10 @@ VOTER_ABI = [
     {"inputs":[],"name":"epochNext","outputs":[{"type":"uint256","name":""}],"stateMutability":"view","type":"function"},
 ]
 
+VOTING_ESCROW_ABI = [
+    {"inputs":[],"name":"totalSupply","outputs":[{"type":"uint256","name":""}],"stateMutability":"view","type":"function"},
+]
+
 MINTER_ABI = [
     {"inputs":[],"name":"weekly","outputs":[{"type":"uint256","name":""}],"stateMutability":"view","type":"function"},
     {"inputs":[{"type":"uint256","name":"_minted"}],"name":"calculateGrowth","outputs":[{"type":"uint256","name":""}],"stateMutability":"view","type":"function"},
@@ -214,11 +218,22 @@ def read_snapshot(w3: Optional[Web3] = None) -> VoteSnapshot:
 
     voter = w3.eth.contract(address=Web3.to_checksum_address(VOTER), abi=VOTER_ABI)
     minter = w3.eth.contract(address=Web3.to_checksum_address(MINTER), abi=MINTER_ABI)
+    veaero = w3.eth.contract(address=Web3.to_checksum_address(VOTING_ESCROW), abi=VOTING_ESCROW_ABI)
     rewards_sugar = w3.eth.contract(
         address=Web3.to_checksum_address(REWARDS_SUGAR), abi=REWARDS_SUGAR_ABI
     )
 
-    total_weight = voter.functions.totalWeight().call()
+    voter_total_weight = voter.functions.totalWeight().call()
+    ve_total_supply = veaero.functions.totalSupply().call()
+    print(
+        f"[rpc] Voter.totalWeight={voter_total_weight/1e18:,.4f} "
+        f"VotingEscrow.totalSupply={ve_total_supply/1e18:,.4f}",
+        flush=True,
+    )
+    # Frontend "Total voting power this epoch" matches VotingEscrow.totalSupply()
+    # (all live veAERO at the current timestamp), not Voter.totalWeight (only
+    # votes already cast this epoch).
+    total_weight = ve_total_supply
     weekly_gross = minter.functions.weekly().call()
     growth = minter.functions.calculateGrowth(weekly_gross).call()  # rebase to veAERO lockers
     team_rate_bps = minter.functions.teamRate().call()              # basis points
