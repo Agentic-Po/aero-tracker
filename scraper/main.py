@@ -27,8 +27,7 @@ def run_8h(dry_run: bool) -> int:
         f"VP={snap.total_voting_power:,.0f} new_em={snap.new_emissions:,.0f} "
         f"aero=${snap.aero_price_usd:.4f} fees=${snap.total_fees:,.0f} "
         f"incentives=${snap.total_incentives:,.0f} rewards=${snap.total_rewards:,.0f} "
-        f"mult={snap.multiplier:.3f} pools={snap.pool_count} "
-        f"unpriced_tokens={snap.unpriced_token_count}",
+        f"mult={snap.multiplier:.3f} pools={snap.pool_count}",
         flush=True,
     )
 

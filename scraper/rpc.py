@@ -139,14 +139,20 @@ def read_snapshot(w3: Optional[Web3] = None) -> VoteSnapshot:
     # 3. Total Fees + Total Incentives via sugar-sdk
     # The SDK uses Aerodrome's on-chain price oracle → same USD values the
     # frontend displays.
+    #
+    # - get_pools(): all 1700+ pools with per-pool current-epoch token0_fees +
+    #   token1_fees in USD. Summed across pools = Total Fees (frontend match).
+    # - get_latest_pool_epochs(): per-pool epoch data; only voted pools have
+    #   active bribes, so sum total_incentives across these = Total Incentives.
     os.environ["SUGAR_RPC_URI_8453"] = _rpc_url()
     from sugar.chains import BaseChain  # imported here so import errors are loud
     with BaseChain() as chain:
+        pools = chain.get_pools()
         epochs = chain.get_latest_pool_epochs()
-    total_fees = sum(float(ep.total_fees) for ep in epochs)
+    total_fees = sum(float(p.total_fees) for p in pools if p.total_fees)
     total_incentives = sum(float(ep.total_incentives) for ep in epochs)
     print(
-        f"[rpc] sugar-sdk: {len(epochs)} pool-epochs · "
+        f"[rpc] sugar-sdk: {len(pools)} pools, {len(epochs)} pool-epochs · "
         f"fees=${total_fees:,.2f} incentives=${total_incentives:,.2f}",
         flush=True,
     )
