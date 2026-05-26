@@ -60,9 +60,10 @@ def format_8h_message(
 
     warn = "  ⚠️ <b>below 1.1</b>" if multiplier < 1.1 else ""
 
-    title = "<b>Aero Multiplier · 8h snapshot</b>"
+    title = "🚧 <b>Aero Multiplier · 8h snapshot</b> 🚧"
     if epoch_number is not None:
         title += f" · ep{epoch_number}"
+    title += "\n<i>Phase 1 draft — totals being refined (CL pool coverage TBD)</i>"
 
     lines = [
         title,
