@@ -286,6 +286,8 @@ def read_snapshot(w3: Optional[Web3] = None) -> VoteSnapshot:
             d = _decimals_for(w3, token, decimals_cache)
             total_fees_usd += (amount / (10 ** d)) * price
     unpriced_count = len(unpriced_set)
+    if unpriced_set:
+        print(f"[rpc] unpriced tokens: {sorted(unpriced_set)}", flush=True)
 
     aero_price = get_aero_price_usd()
     new_emissions = weekly / 1e18
