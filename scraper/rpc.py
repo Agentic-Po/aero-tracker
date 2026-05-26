@@ -29,10 +29,13 @@ from web3 import Web3
 
 
 # ---- Aerodrome contract addresses on Base ----------------------------------
-VOTER          = "0x16613524e02ad97eDfeF371bC883F2F5d6C480A5"
-MINTER         = "0xeB018363F0a9Af8f91F06FEe6613a751b2A33FE5"
-AERO_TOKEN     = "0x940181a94A35A4569E4529A3CDfB74e38FD98631"
-VOTING_ESCROW  = "0xeBf418Fe2512e7E6bd9b87a8F0f294aCDC67e6B4"
+VOTER             = "0x16613524e02ad97eDfeF371bC883F2F5d6C480A5"
+MINTER            = "0xeB018363F0a9Af8f91F06FEe6613a751b2A33FE5"
+AERO_TOKEN        = "0x940181a94A35A4569E4529A3CDfB74e38FD98631"
+VOTING_ESCROW     = "0xeBf418Fe2512e7E6bd9b87a8F0f294aCDC67e6B4"
+FACTORY_REGISTRY  = "0x5C3F18F06CC09CA1910767A34a20F771039E37C0"
+# Slipstream (Aerodrome's concentrated-liquidity) factory
+CL_FACTORY        = "0x420DD381b31aEf6683db6B902084cB0FFECe40Da"  # likely; verify via probe
 
 # The same RPC Aerodrome's frontend uses.
 DEFAULT_BASE_RPC = "https://lb.drpc.live/base/Avibgvi26EjPsw76UtdwmsQOcPkUJIUR8YARurWHF38a"
@@ -60,6 +63,17 @@ MINTER_ABI = [
 
 ERC20_TOTAL_SUPPLY_ABI = [
     {"inputs":[],"name":"totalSupply","outputs":[{"type":"uint256","name":""}],"stateMutability":"view","type":"function"},
+]
+
+FACTORY_REGISTRY_ABI = [
+    {"inputs":[],"name":"poolFactories","outputs":[{"type":"address[]","name":""}],"stateMutability":"view","type":"function"},
+]
+# Try common pool-count selectors — v2 PoolFactory has allPoolsLength; CL/UniV3-style
+# factories use poolCount or similar.
+POOL_FACTORY_LEN_ABI = [
+    {"inputs":[],"name":"allPoolsLength","outputs":[{"type":"uint256","name":""}],"stateMutability":"view","type":"function"},
+    {"inputs":[],"name":"poolCount","outputs":[{"type":"uint256","name":""}],"stateMutability":"view","type":"function"},
+    {"inputs":[],"name":"allCLPoolsLength","outputs":[{"type":"uint256","name":""}],"stateMutability":"view","type":"function"},
 ]
 
 
@@ -109,8 +123,36 @@ def get_aero_price_usd() -> float:
 
 
 # ---- The main entry point --------------------------------------------------
+def _diag_factory_registry(w3: Web3) -> None:
+    """One-shot diagnostic: enumerate factories in Aerodrome's FactoryRegistry
+    and try a few pool-count signatures on each. Tells us if the CL/Slipstream
+    factory is registered (and therefore reachable by LpSugar.all)."""
+    fr = w3.eth.contract(address=Web3.to_checksum_address(FACTORY_REGISTRY), abi=FACTORY_REGISTRY_ABI)
+    try:
+        factories = fr.functions.poolFactories().call()
+    except Exception as e:
+        print(f"[diag] FactoryRegistry.poolFactories failed: {e}", flush=True)
+        return
+    print(f"[diag] FactoryRegistry returns {len(factories)} factories:", flush=True)
+    for addr in factories:
+        size = None
+        which = None
+        for fn_abi in POOL_FACTORY_LEN_ABI:
+            try:
+                f = w3.eth.contract(address=Web3.to_checksum_address(addr), abi=[fn_abi])
+                size = getattr(f.functions, fn_abi["name"])().call()
+                which = fn_abi["name"]
+                break
+            except Exception:
+                continue
+        print(f"[diag]   {addr}  {which}={size}", flush=True)
+
+
 def read_snapshot(w3: Optional[Web3] = None) -> VoteSnapshot:
     w3 = w3 or make_web3()
+
+    # Diagnostic first run — comment out once factory list is understood
+    _diag_factory_registry(w3)
 
     # 1. Total Voting Power — VotingEscrow.totalSupply matches frontend exactly
     veaero = w3.eth.contract(address=Web3.to_checksum_address(VOTING_ESCROW), abi=VOTING_ESCROW_ABI)
