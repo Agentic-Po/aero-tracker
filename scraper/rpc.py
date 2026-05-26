@@ -220,13 +220,17 @@ def read_snapshot(w3: Optional[Web3] = None) -> VoteSnapshot:
     weekly = minter.functions.weekly().call()
     pool_count = voter.functions.length().call()
 
-    # Pull all pools' latest epoch data in batches.
+    # Pull all pools' current-epoch data in batches.
+    #
+    # `epochsLatest(_limit, _offset)` SCANS `_limit` pools starting at `_offset`
+    # and returns only those that have current-epoch data — so the returned
+    # array can be SHORTER than `_limit`. Advance by `_limit` (pools scanned),
+    # not by `len(batch)`, otherwise we stop early.
     epochs: list[tuple] = []
     BATCH = 100
     offset = 0
-    safety = 0
-    while safety < 50:  # at most 5000 pools, way over actual count
-        safety += 1
+    batches_done = 0
+    while offset < pool_count:
         try:
             batch = rewards_sugar.functions.epochsLatest(BATCH, offset).call()
         except Exception:
@@ -234,12 +238,14 @@ def read_snapshot(w3: Optional[Web3] = None) -> VoteSnapshot:
                 BATCH = 20
                 continue
             raise
-        if not batch:
-            break
         epochs.extend(batch)
-        if len(batch) < BATCH:
-            break
+        batches_done += 1
         offset += BATCH
+    print(
+        f"[rpc] scanned {offset} pools across {batches_done} batches; "
+        f"got {len(epochs)} pool-epoch entries",
+        flush=True,
+    )
 
     # epochsLatest returns the LATEST epoch per pool; keep them all
     latest_ts = max((e[0] for e in epochs), default=0)
