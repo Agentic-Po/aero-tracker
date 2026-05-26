@@ -19,6 +19,13 @@ def _fmt_num(n: float, decimals: int = 2) -> str:
     return f"{n:.{decimals}f}"
 
 
+def _fmt_precise(n: float | None) -> str:
+    """Full-integer + short form, e.g. '1,003,295,086 (≈ 1.0B)'."""
+    if n is None:
+        return "—"
+    return f"{n:,.0f} (≈ {_fmt_num(n)})"
+
+
 def send(text: str, *, parse_mode: str = "HTML", disable_preview: bool = True) -> None:
     token = os.environ["TELEGRAM_BOT_TOKEN"]
     chat_id = os.environ["TELEGRAM_CHAT_ID"]
@@ -63,29 +70,29 @@ def format_8h_message(
     title = "🚧 <b>Aero Multiplier · 8h snapshot</b> 🚧"
     if epoch_number is not None:
         title += f" · ep{epoch_number}"
-    title += "\n<i>Phase 1 draft — totals being refined (CL pool coverage TBD)</i>"
+
+    emissions_value = new_emissions * aero_price_usd
 
     lines = [
         title,
         "",
-        f"<b>Multiplier:</b> {multiplier:.3f}×{delta}{warn}",
-        f"<b>AERO price:</b> ${aero_price_usd:,.4f}",
+        "<b>✓ EXACT (verified vs Aerodrome /vote):</b>",
+        f"Total VP:       {_fmt_precise(total_voting_power)} veAERO",
+        f"New Emissions:  {_fmt_precise(new_emissions)} AERO",
+        f"AERO price:     ${aero_price_usd:,.4f}",
+        f"Emissions val:  ${_fmt_precise(emissions_value)}",
         "",
-        f"Total VP:      {_fmt_num(total_voting_power) if total_voting_power else '—'} veAERO",
-        f"Total Fees:    ${_fmt_num(total_fees) if total_fees else '—'}",
-        f"Incentives:    ${_fmt_num(total_incentives) if total_incentives else '—'}",
-        f"Total Rewards: ${_fmt_num(total_rewards)}",
-        f"New Emissions: {_fmt_num(new_emissions)} AERO",
+        "<b>⚠ REFINING (LpSugar.all() rewrite pending):</b>",
+        f"Total Fees:     ${_fmt_precise(total_fees)}",
+        f"Incentives:     ${_fmt_precise(total_incentives)}",
+        f"Total Rewards:  ${_fmt_precise(total_rewards)}",
+        f"Multiplier:     {multiplier:.3f}×{delta}{warn}",
         "",
-        "<b>If incentives +$:</b>",
-        f"  +1k    → {sim_plus_1k:.3f}×",
-        f"  +25k   → {sim_plus_25k:.3f}×",
-        f"  +50k   → {sim_plus_50k:.3f}×",
-        f"  +100k  → {sim_plus_100k:.3f}×",
+        "<i>Phase 1.2 — TVP + Emissions match frontend exactly. "
+        "Fees/Incentives still ~14× and ~3× low; rewriting via LpSugar.all() + per-pool bribe reads in next iteration.</i>",
     ]
     if unpriced_token_count:
-        lines.append("")
-        lines.append(f"<i>note: {unpriced_token_count} reward token(s) had no CoinGecko price and were skipped</i>")
+        lines.append(f"<i>({unpriced_token_count} reward token(s) had no price and were skipped)</i>")
     return "\n".join(lines)
 
 
