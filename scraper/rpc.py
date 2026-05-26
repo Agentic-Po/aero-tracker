@@ -60,7 +60,17 @@ MINTER_ABI = [
     {"inputs":[],"name":"weekly","outputs":[{"type":"uint256","name":""}],"stateMutability":"view","type":"function"},
     {"inputs":[{"type":"uint256","name":"_minted"}],"name":"calculateGrowth","outputs":[{"type":"uint256","name":""}],"stateMutability":"view","type":"function"},
     {"inputs":[],"name":"teamRate","outputs":[{"type":"uint256","name":""}],"stateMutability":"view","type":"function"},
+    {"inputs":[],"name":"tailEmissionRate","outputs":[{"type":"uint256","name":""}],"stateMutability":"view","type":"function"},
+    {"inputs":[],"name":"epochCount","outputs":[{"type":"uint256","name":""}],"stateMutability":"view","type":"function"},
 ]
+
+ERC20_TOTAL_SUPPLY_ABI = [
+    {"inputs":[],"name":"totalSupply","outputs":[{"type":"uint256","name":""}],"stateMutability":"view","type":"function"},
+]
+
+# Constants from Minter.sol main branch
+MAX_BPS = 10_000
+TAIL_START = 8_969_150 * 10**18
 
 ERC20_DECIMALS_ABI = [
     {"inputs":[],"name":"decimals","outputs":[{"type":"uint8","name":""}],"stateMutability":"view","type":"function"},
@@ -234,6 +244,18 @@ def read_snapshot(w3: Optional[Web3] = None) -> VoteSnapshot:
     # (all live veAERO at the current timestamp), not Voter.totalWeight (only
     # votes already cast this epoch).
     total_weight = ve_total_supply
+
+    # ---- Emission diagnostics: read all the Minter constants/state ----
+    aero = w3.eth.contract(address=Web3.to_checksum_address(AERO_TOKEN), abi=ERC20_TOTAL_SUPPLY_ABI)
+    aero_total_supply = aero.functions.totalSupply().call()
+    tail_rate = minter.functions.tailEmissionRate().call()
+    epoch_count = minter.functions.epochCount().call()
+    print(
+        f"[rpc] aero.totalSupply={aero_total_supply/1e18:,.4f} "
+        f"tailEmissionRate={tail_rate} epochCount={epoch_count} "
+        f"TAIL_START={TAIL_START/1e18:,.0f}",
+        flush=True,
+    )
     weekly_gross = minter.functions.weekly().call()
     growth = minter.functions.calculateGrowth(weekly_gross).call()  # rebase to veAERO lockers
     team_rate_bps = minter.functions.teamRate().call()              # basis points
